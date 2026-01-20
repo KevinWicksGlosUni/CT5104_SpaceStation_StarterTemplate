@@ -30,7 +30,7 @@ Unity will prompt to install missing packages automatically.
 5. Allow Unity to regenerate Library files
 6. Open the main scene when prompted
 
-⚠️ Do **not** commit the `Library/` folder.
+Do **not** commit the `Library/` folder.
 
 ---
 
@@ -39,7 +39,7 @@ Unity will prompt to install missing packages automatically.
 This project uses **Git Large File Storage (LFS)** for large assets.
 
 ### If using GitHub Desktop
-✔ Git LFS is installed automatically
+Git LFS is installed automatically
 
 ### If using Git via command line
 Install from:  
