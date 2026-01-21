@@ -1,4 +1,4 @@
-#if AR_FOUNDATION_PRESENT
+﻿#if AR_FOUNDATION_PRESENT
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
