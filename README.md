@@ -6,7 +6,7 @@ Each student will receive **their own private copy** via zip download.
 ---
 
 ## Unity Version
-**Unity 6 LTS (6000.0.53f1)**  
+**Unity 6 LTS (6000.0.58f2)**  
 Please use the same version to avoid compatibility issues.
 
 ---
