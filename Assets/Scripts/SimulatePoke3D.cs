@@ -1,67 +1,164 @@
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
-
-
-	// Add to the 'Non_VR_Camera' game object.
-	
-	
-
+/// <summary>
+/// SIMULATE POKE (EDITOR / DESKTOP ONLY)
+/// ===================================
+///
+/// PURPOSE
+/// -------
+/// Allows XR Interactables to be "poked" (selected once)
+/// in the Unity Editor without a VR headset.
+///
+/// A poke is defined here as:
+/// • SelectEnter
+/// • immediately followed by SelectExit
+///
+/// INTENDED USE
+/// ------------
+/// • Editor-only testing
+/// • Teaching XR interaction fundamentals
+/// • Desktop fallback when no headset is available
+///
+/// NOT INTENDED FOR
+/// ----------------
+/// • Real VR gameplay
+/// • Continuous interaction / holding
+/// </summary>
 public class SimulatePoke3D : MonoBehaviour
 {
-    public KeyCode pokeKey = KeyCode.E;  // Key to simulate poke
-    public float maxDistance = 3f;  // Max interaction distance
-    public XRInteractionManager interactionManager;  // Reference to the interaction system
-    public UnityEngine.XR.Interaction.Toolkit.Interactors.XRDirectInteractor dummyInteractor;  // Dummy interactor simulating VR hand
+    // ======================================================
+    // INSPECTOR CONTROLS
+    // ======================================================
 
-    void Start()
+    [Header("Input")]
+
+    [Tooltip("Key used to simulate a poke interaction")]
+    public KeyCode pokeKey = KeyCode.E;
+
+    [Header("Raycast Settings")]
+
+    [Tooltip("Maximum distance for poke raycast")]
+    public float maxDistance = 3f;
+
+    [Header("XR References (Optional)")]
+
+    [Tooltip("XR Interaction Manager (auto-found if null)")]
+    public XRInteractionManager interactionManager;
+
+    [Tooltip("Dummy XRDirectInteractor (auto-created if null)")]
+    public XRDirectInteractor dummyInteractor;
+
+    // ======================================================
+    // UNITY LIFECYCLE
+    // ======================================================
+
+    private void Start()
     {
-        // Auto-find the XR Interaction Manager if not set
+        // --------------------------------------------------
+        // 1. Find XRInteractionManager (Unity 6 safe)
+        // --------------------------------------------------
         if (interactionManager == null)
         {
-            interactionManager = FindObjectOfType<XRInteractionManager>();
+            interactionManager = FindAnyObjectByType<XRInteractionManager>();
         }
 
-        // Auto-create a dummy XR Interactor if not assigned
+        if (interactionManager == null)
+        {
+            Debug.LogWarning(
+                "[SimulatePoke3D] No XRInteractionManager found. Script disabled."
+            );
+            enabled = false;
+            return;
+        }
+
+        // --------------------------------------------------
+        // 2. Create dummy interactor if required
+        // --------------------------------------------------
         if (dummyInteractor == null)
         {
-            GameObject interactorObj = new GameObject("DummyInteractor");
-            dummyInteractor = interactorObj.AddComponent<UnityEngine.XR.Interaction.Toolkit.Interactors.XRDirectInteractor>();
-
-            // Ensure it has an interaction manager
-            dummyInteractor.interactionManager = interactionManager;
+            CreateDummyInteractor();
         }
     }
 
-    void Update()
+    private void Update()
     {
         if (Input.GetKeyDown(pokeKey))
         {
-            SimulatePokeAction();
+            SimulatePoke();
         }
     }
 
-    void SimulatePokeAction()
+    // ======================================================
+    // DUMMY INTERACTOR SETUP
+    // ======================================================
+
+    /// <summary>
+    /// Creates a hidden XRDirectInteractor that satisfies
+    /// XR validation rules.
+    ///
+    /// IMPORTANT:
+    /// Collider + Rigidbody MUST exist BEFORE
+    /// XRDirectInteractor is added.
+    /// </summary>
+    private void CreateDummyInteractor()
+    {
+        GameObject interactorGO = new GameObject("Editor_Dummy_XRDirectInteractor");
+
+        // Trigger collider (required)
+        SphereCollider trigger = interactorGO.AddComponent<SphereCollider>();
+        trigger.isTrigger = true;
+        trigger.radius = 0.08f;
+
+        // Rigidbody (required for trigger events)
+        Rigidbody rb = interactorGO.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+
+        // XRDirectInteractor (added last)
+        dummyInteractor = interactorGO.AddComponent<XRDirectInteractor>();
+        dummyInteractor.interactionManager = interactionManager;
+
+        // Hide helper object from hierarchy
+        interactorGO.hideFlags = HideFlags.HideInHierarchy;
+    }
+
+    // ======================================================
+    // POKE LOGIC
+    // ======================================================
+
+    /// <summary>
+    /// Performs a raycast forward and simulates
+    /// a single XR "poke" interaction.
+    /// </summary>
+    private void SimulatePoke()
     {
         Ray ray = new Ray(transform.position, transform.forward);
-        RaycastHit hit;
 
-        if (Physics.Raycast(ray, out hit, maxDistance))
-        {
-            var interactable = hit.collider.GetComponent<UnityEngine.XR.Interaction.Toolkit.Interactables.XRBaseInteractable>();
+        if (!Physics.Raycast(ray, out RaycastHit hit, maxDistance))
+            return;
 
-            if (interactable != null && interactionManager != null)
-            {
-                // Correctly cast and use the updated SelectEnter() method
-                interactionManager.SelectEnter(
-                    (UnityEngine.XR.Interaction.Toolkit.Interactors.IXRSelectInteractor)dummyInteractor,
-                    (UnityEngine.XR.Interaction.Toolkit.Interactables.IXRSelectInteractable)interactable
-                );
+        XRBaseInteractable interactable =
+            hit.collider.GetComponent<XRBaseInteractable>();
 
-                Debug.Log("Simulated Poke on: " + interactable.gameObject.name);
-            }
-        }
+        if (interactable == null)
+            return;
+
+        // --------------------------------------------------
+        // XRIT 2.5+ INTERFACE-BASED SELECTION
+        // --------------------------------------------------
+        interactionManager.SelectEnter(
+            (IXRSelectInteractor)dummyInteractor,
+            (IXRSelectInteractable)interactable
+        );
+
+        interactionManager.SelectExit(
+            (IXRSelectInteractor)dummyInteractor,
+            (IXRSelectInteractable)interactable
+        );
+
+        Debug.Log($"[SimulatePoke3D] Poked: {interactable.name}");
     }
 }
-
-

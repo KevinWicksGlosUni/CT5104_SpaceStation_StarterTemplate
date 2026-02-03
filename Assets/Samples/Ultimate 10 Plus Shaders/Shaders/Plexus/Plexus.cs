@@ -1,67 +1,70 @@
-﻿/*
-                          ██████╗░██╗░░░░░███████╗██╗░░██╗██╗░░░██╗░██████╗
-                          ██╔══██╗██║░░░░░██╔════╝╚██╗██╔╝██║░░░██║██╔════╝
-                          ██████╔╝██║░░░░░█████╗░░░╚███╔╝░██║░░░██║╚█████╗░
-                          ██╔═══╝░██║░░░░░██╔══╝░░░██╔██╗░██║░░░██║░╚═══██╗
-                          ██║░░░░░███████╗███████╗██╔╝╚██╗╚██████╔╝██████╔╝
-                          ╚═╝░░░░░╚══════╝╚══════╝╚═╝░░╚═╝░╚═════╝░╚═════╝░
-
-                █▀▀▄ █──█ 　 ▀▀█▀▀ █──█ █▀▀ 　 ░█▀▀▄ █▀▀ ▀█─█▀ █▀▀ █── █▀▀█ █▀▀█ █▀▀ █▀▀█ 
-                █▀▀▄ █▄▄█ 　 ─░█── █▀▀█ █▀▀ 　 ░█─░█ █▀▀ ─█▄█─ █▀▀ █── █──█ █──█ █▀▀ █▄▄▀ 
-                ▀▀▀─ ▄▄▄█ 　 ─░█── ▀──▀ ▀▀▀ 　 ░█▄▄▀ ▀▀▀ ──▀── ▀▀▀ ▀▀▀ ▀▀▀▀ █▀▀▀ ▀▀▀ ▀─▀▀
-____________________________________________________________________________________________________________________________________________
-
-        ▄▀█ █▀ █▀ █▀▀ ▀█▀ ▀   █░█ █░░ ▀█▀ █ █▀▄▀█ ▄▀█ ▀█▀ █▀▀   ▄█ █▀█ ▄█▄   █▀ █░█ ▄▀█ █▀▄ █▀▀ █▀█ █▀
-        █▀█ ▄█ ▄█ ██▄ ░█░ ▄   █▄█ █▄▄ ░█░ █ █░▀░█ █▀█ ░█░ ██▄   ░█ █▄█ ░▀░   ▄█ █▀█ █▀█ █▄▀ ██▄ █▀▄ ▄█
-____________________________________________________________________________________________________________________________________________
-License:
-    The license is ATTRIBUTION 3.0
-
-    More license info here:
-        https://creativecommons.org/licenses/by/3.0/
-____________________________________________________________________________________________________________________________________________
-This shader has NOT been tested on any other PC configuration except the following:
-    CPU: Intel Core i5-6400
-    GPU: NVidia GTX 750Ti
-    RAM: 16GB
-    Windows: 10 x64
-    DirectX: 11
-____________________________________________________________________________________________________________________________________________
-*/
-
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-//[ExecuteAlways]
-public class Plexus : MonoBehaviour
+/// <summary>
+/// Safer Plexus implementation for Unity 6 + VR:
+/// - Reuses ComputeBuffers (no per-frame GPU allocations)
+/// - Reuses Mesh (no per-frame Mesh allocations)
+/// - Fixes coroutine enable logic
+/// - Avoids NaNs in line extrusion
+/// </summary>
+public class PlexusSafe : MonoBehaviour
 {
+    [Header("Simulation")]
     public ComputeShader plexus;
-
     public int amountOfPoints = 100;
-    public int PPPS = 2; // Processed Points Per Second
+    [Tooltip("Connections recalculated per frame step (higher = more CPU).")]
+    public int pointsProcessedPerFrame = 2;
+    public Vector3 box = new Vector3(4, 4, 4);
+    public float particleSpeed = 1.0f;
+    public float maxConnDistance = 3.0f;
+
+    [Header("Rendering")]
+    [Range(0.0001f, 0.2f)]
     public float lineWidth = 0.02f;
     public Material lineMaterial;
 
-    public Vector3 box = new Vector3(4, 4, 4);
+    [Header("Control")]
+    public bool isEnabled = true;
 
-    public float particleSpeed = 1.0f;
-    public float maxConnDistance = 3.0f; // The maximum distance for two points to connect
-    private float maxConnDistanceSqr;
-
+    // Data
+    private Vector3[] positions;
     private Vector3[] defaultPositions;
     private Vector3[] velocities;
-    private Vector3[] positions;
 
+    // Connections
+    private readonly List<KeyValuePair<int, int>> connected = new();
+    private float maxConnDistanceSqr;
+
+    // GPU buffers
+    private ComputeBuffer positionsBuffer;
+    private ComputeBuffer defaultPositionsBuffer;
+    private ComputeBuffer velocitiesBuffer;
+    private int kernelIndex = -1;
+
+    // Mesh + CPU build buffers
     private Mesh lineMesh;
+    private readonly List<Vector3> lineVerts = new(4096);
+    private readonly List<int> lineTris = new(6144);
 
-    private void Start()
+    private Coroutine connectRoutine;
+
+    private void OnEnable()
     {
-        lineMaterial.SetVector("_BoxDims", new Vector4(box.x, box.y, box.z, 1));
+        if (!lineMaterial)
+        {
+            Debug.LogWarning($"{nameof(PlexusSafe)} on {name}: No lineMaterial assigned. Disabling.");
+            enabled = false;
+            return;
+        }
 
+        // init arrays
         positions = new Vector3[amountOfPoints];
         defaultPositions = new Vector3[amountOfPoints];
-        for (int i = 0; i < amountOfPoints; ++i)
+        velocities = new Vector3[amountOfPoints];
+
+        for (int i = 0; i < amountOfPoints; i++)
         {
             positions[i] = new Vector3(
                 Random.Range(-box.x, box.x),
@@ -69,169 +72,196 @@ public class Plexus : MonoBehaviour
                 Random.Range(-box.z, box.z));
 
             defaultPositions[i] = positions[i];
+            velocities[i] = Vector3.zero;
         }
-        
-        lineMesh = new Mesh();
 
-        int[] trigs = new int[6];
+        maxConnDistanceSqr = maxConnDistance * maxConnDistance;
 
-        trigs[0] = 0;
-        trigs[1] = 1;
-        trigs[2] = 2;
+        // setup material uniform once
+        lineMaterial.SetVector("_BoxDims", new Vector4(box.x, box.y, box.z, 1));
 
-        trigs[3] = 3;
-        trigs[4] = 2;
-        trigs[5] = 1;
+        // mesh created once
+        lineMesh = new Mesh { name = "PlexusLines" };
+        lineMesh.MarkDynamic();
 
-        lineMesh.vertices = verts;
-        lineMesh.triangles = trigs;
+        // compute shader setup (optional)
+        if (plexus != null)
+        {
+            kernelIndex = plexus.FindKernel("MoveParticels");
 
-        velocities = new Vector3[amountOfPoints];
-        StartCoroutine(ConnectDots());
+            positionsBuffer = new ComputeBuffer(amountOfPoints, sizeof(float) * 3);
+            defaultPositionsBuffer = new ComputeBuffer(amountOfPoints, sizeof(float) * 3);
+            velocitiesBuffer = new ComputeBuffer(amountOfPoints, sizeof(float) * 3);
+
+            positionsBuffer.SetData(positions);
+            defaultPositionsBuffer.SetData(defaultPositions);
+            velocitiesBuffer.SetData(velocities);
+        }
+        else
+        {
+            Debug.LogWarning($"{nameof(PlexusSafe)} on {name}: No ComputeShader assigned. Will not move points on GPU.");
+        }
+
+        // start connection refresh
+        connectRoutine = StartCoroutine(ConnectDotsLoop());
+    }
+
+    private void OnDisable()
+    {
+        if (connectRoutine != null) StopCoroutine(connectRoutine);
+        connectRoutine = null;
+
+        positionsBuffer?.Release();
+        defaultPositionsBuffer?.Release();
+        velocitiesBuffer?.Release();
+
+        positionsBuffer = null;
+        defaultPositionsBuffer = null;
+        velocitiesBuffer = null;
+
+        if (lineMesh != null)
+        {
+            Destroy(lineMesh);
+            lineMesh = null;
+        }
     }
 
     private void Update()
     {
+        if (!isEnabled) return;
+
         MovePoints();
         RenderLines();
     }
 
     private void MovePoints()
     {
-        int kernelIndex = plexus.FindKernel("MoveParticels");
+        if (plexus == null || kernelIndex < 0) return;
 
-        // sizeof(float3) == 12
-        ComputeBuffer positionsBuffer = new ComputeBuffer(positions.Length, 12);
+        // feed buffers
         positionsBuffer.SetData(positions);
-        plexus.SetBuffer(kernelIndex, "positions", positionsBuffer);
-
-        // sizeof(float3) == 12
-        ComputeBuffer defaultPositionsBuffer = new ComputeBuffer(defaultPositions.Length, 12);
         defaultPositionsBuffer.SetData(defaultPositions);
-        plexus.SetBuffer(kernelIndex, "defaultPositions", defaultPositionsBuffer);
-
-        // sizeof(float3) == 12
-        ComputeBuffer velocitiesBuffer = new ComputeBuffer(velocities.Length, 12);
         velocitiesBuffer.SetData(velocities);
-        plexus.SetBuffer(kernelIndex, "velocities", velocitiesBuffer);
 
+        plexus.SetBuffer(kernelIndex, "positions", positionsBuffer);
+        plexus.SetBuffer(kernelIndex, "defaultPositions", defaultPositionsBuffer);
+        plexus.SetBuffer(kernelIndex, "velocities", velocitiesBuffer);
 
         plexus.SetFloat("deltaTime", Time.deltaTime);
         plexus.SetFloat("elapsedTime", Time.time);
         plexus.SetFloat("particleSpeed", particleSpeed);
 
-        plexus.Dispatch(kernelIndex, positions.Length, 1, 1);
+        // dispatch (1 thread group per point is unusual; keeping it consistent with your original)
+        plexus.Dispatch(kernelIndex, amountOfPoints, 1, 1);
 
+        // read back
         positionsBuffer.GetData(positions);
-
-        positionsBuffer.Release();
-        defaultPositionsBuffer.Release();
-        velocitiesBuffer.Release();
+        velocitiesBuffer.GetData(velocities);
     }
 
-    private static float DistanceSqr(Vector3 p1, Vector3 p2)
+    private static float DistanceSqr(in Vector3 a, in Vector3 b)
     {
-        return (p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + (p1.z - p2.z) * (p1.z - p2.z);
+        Vector3 d = a - b;
+        return d.x * d.x + d.y * d.y + d.z * d.z;
     }
 
-    Vector3 normal, side, p1, p2;
-    int startingVerticesIndex = 0;
-    List<int> lineTrigs = new List<int>();
-    List<Vector3> lineVerts = new List<Vector3>();
-    Vector3[] verts = new Vector3[4];
-    int[] trigs = new int[6];
-    private void RenderLines()
+    private IEnumerator ConnectDotsLoop()
     {
-        lineMesh = new Mesh();
-        for (int i = 0; i < connected.Count; ++i)
+        var wait = new WaitForEndOfFrame();
+        int index = 0;
+
+        while (true)
         {
-            //   DrawLine(positions[connected[i].Key], positions[connected[i].Value]);
-            //transform.position - positions[connected[i].Key], // local to world space
-            //transform.position - positions[connected[i].Value]); // local to world space
+            yield return wait;
 
-            p1 = positions[connected[i].Key];
-            p2 = positions[connected[i].Value];
+            if (!isEnabled) continue;
 
-            normal = Vector3.Cross(p1, p2);
-            side = Vector3.Cross(normal, p2 - p1);
-            side.Normalize();
-
-
-            startingVerticesIndex = lineVerts.Count;
-
-
-            verts[0] = p1 + side * (lineWidth / 2);
-            verts[1] = p1 + side * (lineWidth / -2);
-            verts[2] = p2 + side * (lineWidth / 2);
-            verts[3] = p2 + side * (lineWidth / -2);
-            
-
-            trigs[0] = startingVerticesIndex;
-            trigs[1] = trigs[5] = startingVerticesIndex + 1;
-            trigs[2] = trigs[4] = startingVerticesIndex + 2;
-            trigs[3] = startingVerticesIndex + 3;
-
-
-            lineVerts.AddRange(verts);
-            lineTrigs.AddRange(trigs);
-        }
-
-        lineMesh.vertices = lineVerts.ToArray();
-        lineMesh.triangles = lineTrigs.ToArray();
-        
-        // Drawing the mesh
-        lineMesh.RecalculateBounds();
-        Graphics.DrawMesh(lineMesh, transform.localToWorldMatrix, lineMaterial, 0);
-
-        // Emptying the memory
-        lineTrigs.Clear();
-        lineVerts.Clear();
-    }
-
-    [HideInInspector]
-    public bool isEnabled = false;
-    List<KeyValuePair<int, int>> connected = new List<KeyValuePair<int, int>>();
-    HashSet<KeyValuePair<int, int>> connectedHashSet = new HashSet<KeyValuePair<int, int>>();
-
-    private IEnumerator ConnectDots()
-    {
-        // the idea behind this code is to extend the connection of dots in time
-        // not to do it each frame for all points but instead of doing it each frame for
-        // N points 
-
-        WaitForEndOfFrame wfeof = new WaitForEndOfFrame();
-        int indx = 0, i = 0, j = 0;
-        Vector3 currentPos;
-
-        maxConnDistanceSqr = maxConnDistance * maxConnDistance;
-
-        do
-        {
-            yield return wfeof;
-            for (j = 0; j < PPPS; ++j)
+            // refresh connections gradually (keeps CPU manageable)
+            for (int j = 0; j < pointsProcessedPerFrame; j++)
             {
-                currentPos = positions[indx];
+                if (index >= amountOfPoints) index = 0;
 
-                connected.RemoveAll(x => x.Key == indx || x.Value == indx);
-                connectedHashSet.RemoveWhere(x => x.Key == indx || x.Value == indx);
+                Vector3 current = positions[index];
 
-                for (i = 0; i < amountOfPoints; ++i)
+                // remove connections involving this point
+                for (int k = connected.Count - 1; k >= 0; k--)
                 {
-                    if (i == indx)
-                        continue;
-                    
-                    if (DistanceSqr(currentPos, positions[i]) < maxConnDistanceSqr)
-                    {
-                        KeyValuePair<int, int> k = new KeyValuePair<int, int>(indx, i);
-                        if(connectedHashSet.Add(k))
-                            connected.Add(new KeyValuePair<int, int>(indx, i));
-                    }
+                    var pair = connected[k];
+                    if (pair.Key == index || pair.Value == index)
+                        connected.RemoveAt(k);
                 }
 
-                ++indx;
-                if (indx >= amountOfPoints)
-                    indx = 0;
+                for (int i = 0; i < amountOfPoints; i++)
+                {
+                    if (i == index) continue;
+
+                    if (DistanceSqr(current, positions[i]) < maxConnDistanceSqr)
+                        connected.Add(new KeyValuePair<int, int>(index, i));
+                }
+
+                index++;
             }
-        } while (!isEnabled);
+        }
+    }
+
+    private void RenderLines()
+    {
+        if (connected.Count == 0) return;
+
+        lineMesh.Clear(false);
+        lineVerts.Clear();
+        lineTris.Clear();
+
+        // Build quads per line (4 verts, 6 tris)
+        // Use a stable side vector: camera-facing if possible.
+        Camera cam = Camera.main;
+        Vector3 camForward = cam ? cam.transform.forward : Vector3.forward;
+
+        for (int i = 0; i < connected.Count; i++)
+        {
+            Vector3 p1 = positions[connected[i].Key];
+            Vector3 p2 = positions[connected[i].Value];
+
+            Vector3 dir = (p2 - p1);
+            float dirMag = dir.magnitude;
+            if (dirMag < 1e-5f) continue;
+
+            dir /= dirMag;
+
+            // Side vector: perpendicular to line and camera forward
+            Vector3 side = Vector3.Cross(dir, camForward);
+            float sideMag = side.magnitude;
+
+            // Fallback if nearly parallel (avoid NaN)
+            if (sideMag < 1e-5f)
+                side = Vector3.Cross(dir, Vector3.up);
+
+            side = side.normalized;
+
+            Vector3 offset = side * (lineWidth * 0.5f);
+
+            int baseIndex = lineVerts.Count;
+
+            lineVerts.Add(p1 + offset);
+            lineVerts.Add(p1 - offset);
+            lineVerts.Add(p2 + offset);
+            lineVerts.Add(p2 - offset);
+
+            // two triangles
+            lineTris.Add(baseIndex + 0);
+            lineTris.Add(baseIndex + 1);
+            lineTris.Add(baseIndex + 2);
+
+            lineTris.Add(baseIndex + 3);
+            lineTris.Add(baseIndex + 2);
+            lineTris.Add(baseIndex + 1);
+        }
+
+        lineMesh.SetVertices(lineVerts);
+        lineMesh.SetTriangles(lineTris, 0, true);
+        lineMesh.RecalculateBounds();
+
+        // Draw
+        Graphics.DrawMesh(lineMesh, transform.localToWorldMatrix, lineMaterial, 0);
     }
 }

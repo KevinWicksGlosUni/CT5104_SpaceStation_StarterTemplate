@@ -1,104 +1,228 @@
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
+/// <summary>
+/// SIMULATE GRAB (EDITOR / DESKTOP ONLY)
+/// ====================================
+///
+/// PURPOSE
+/// -------
+/// Allows XR Grab Interactables to be tested in the Unity Editor
+/// without a VR headset, using a keyboard key and a forward raycast.
+///
+/// DESIGN NOTES
+/// ------------
+/// • This simulates XR *selection events*, not controller tracking
+/// • Uses a hidden XRDirectInteractor
+/// • Uses interface-based XRIT APIs (Unity 6 / XRIT 2.5+ safe)
+/// • Intended for teaching, prototyping, and fallback testing
+///
+/// NOT INTENDED FOR
+/// ----------------
+/// • Real VR gameplay
+/// • Shipping builds
+/// </summary>
 public class SimulateGrab3D : MonoBehaviour
 {
-    public KeyCode grabKey = KeyCode.G; // Key to simulate grab
-    public float maxDistance = 3f; // Max interaction distance
-    public XRInteractionManager interactionManager;
-    public UnityEngine.XR.Interaction.Toolkit.Interactors.XRDirectInteractor dummyInteractor;
+    // ======================================================
+    // INSPECTOR CONTROLS
+    // ======================================================
 
-    private UnityEngine.XR.Interaction.Toolkit.Interactables.IXRSelectInteractable grabbedObject;
+    [Header("Input")]
+
+    [Tooltip("Key to toggle grab / release")]
+    public KeyCode grabKey = KeyCode.G;
+
+    [Header("Raycast Settings")]
+
+    [Tooltip("Maximum grab distance")]
+    public float maxDistance = 3f;
+
+    [Header("XR References (Optional)")]
+
+    [Tooltip("XR Interaction Manager (auto-found if null)")]
+    public XRInteractionManager interactionManager;
+
+    [Tooltip("Dummy XRDirectInteractor (auto-created if null)")]
+    public XRDirectInteractor dummyInteractor;
+
+    // ======================================================
+    // GRAB STATE
+    // ======================================================
+
+    /// <summary>
+    /// Currently grabbed XR interactable (interface-based).
+    /// </summary>
+    private IXRSelectInteractable grabbedInteractable;
+
+    /// <summary>
+    /// Rigidbody of the grabbed object (if present).
+    /// </summary>
     private Rigidbody grabbedRigidbody;
+
+    /// <summary>
+    /// Original parent transform (restored on release).
+    /// </summary>
     private Transform originalParent;
 
-    void Start()
+    // ======================================================
+    // UNITY LIFECYCLE
+    // ======================================================
+
+    private void Start()
     {
+        // --------------------------------------------------
+        // 1. Locate XRInteractionManager (Unity 6 safe)
+        // --------------------------------------------------
         if (interactionManager == null)
         {
-            interactionManager = FindObjectOfType<XRInteractionManager>();
+            interactionManager = FindAnyObjectByType<XRInteractionManager>();
         }
 
+        if (interactionManager == null)
+        {
+            Debug.LogWarning(
+                "[SimulateGrab3D] No XRInteractionManager found. Script disabled."
+            );
+            enabled = false;
+            return;
+        }
+
+        // --------------------------------------------------
+        // 2. Create dummy interactor if needed
+        // --------------------------------------------------
         if (dummyInteractor == null)
         {
-            GameObject interactorObj = new GameObject("DummyInteractor");
-            dummyInteractor = interactorObj.AddComponent<UnityEngine.XR.Interaction.Toolkit.Interactors.XRDirectInteractor>();
-            dummyInteractor.interactionManager = interactionManager;
+            CreateDummyInteractor();
         }
     }
 
-    void Update()
+    private void Update()
     {
+        // --------------------------------------------------
+        // Toggle grab / release
+        // --------------------------------------------------
         if (Input.GetKeyDown(grabKey))
         {
-            if (grabbedObject == null)
+            if (grabbedInteractable == null)
                 SimulateGrab();
             else
                 SimulateRelease();
         }
 
-        if (grabbedObject != null && grabbedRigidbody != null)
+        // --------------------------------------------------
+        // Pull grabbed object toward interactor
+        // --------------------------------------------------
+        // Uses Rigidbody.linearVelocity (Unity 6 preferred API)
+        if (grabbedInteractable != null && grabbedRigidbody != null)
         {
-            // Smoothly move the object toward the interactor's position
             Vector3 targetPosition = dummyInteractor.transform.position;
-            Vector3 smoothPosition = Vector3.Lerp(grabbedRigidbody.position, targetPosition, Time.deltaTime * 10f);
-            grabbedRigidbody.linearVelocity = (smoothPosition - grabbedRigidbody.position) / Time.deltaTime; // Use velocity to move object smoothly
+
+            grabbedRigidbody.linearVelocity =
+                (targetPosition - grabbedRigidbody.position) * 10f;
         }
     }
 
-    void SimulateGrab()
+    // ======================================================
+    // DUMMY INTERACTOR SETUP
+    // ======================================================
+
+    /// <summary>
+    /// Creates a hidden XRDirectInteractor that satisfies
+    /// XR validation rules (collider + rigidbody first).
+    /// </summary>
+    private void CreateDummyInteractor()
+    {
+        GameObject interactorGO = new GameObject("Editor_Dummy_XRDirectInteractor");
+
+        // Trigger collider (required)
+        SphereCollider trigger = interactorGO.AddComponent<SphereCollider>();
+        trigger.isTrigger = true;
+        trigger.radius = 0.08f;
+
+        // Rigidbody (required for trigger detection)
+        Rigidbody rb = interactorGO.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+
+        // XRDirectInteractor (added last)
+        dummyInteractor = interactorGO.AddComponent<XRDirectInteractor>();
+        dummyInteractor.interactionManager = interactionManager;
+
+        // Hide helper object from hierarchy
+        interactorGO.hideFlags = HideFlags.HideInHierarchy;
+    }
+
+    // ======================================================
+    // GRAB / RELEASE LOGIC
+    // ======================================================
+
+    private void SimulateGrab()
     {
         Ray ray = new Ray(transform.position, transform.forward);
-        RaycastHit hit;
 
-        if (Physics.Raycast(ray, out hit, maxDistance))
+        if (!Physics.Raycast(ray, out RaycastHit hit, maxDistance))
+            return;
+
+        XRBaseInteractable interactable =
+            hit.collider.GetComponent<XRBaseInteractable>();
+
+        if (interactable == null)
+            return;
+
+        // --------------------------------------------------
+        // XRIT 2.5+ INTERFACE-BASED SELECTION
+        // --------------------------------------------------
+        interactionManager.SelectEnter(
+            (IXRSelectInteractor)dummyInteractor,
+            (IXRSelectInteractable)interactable
+        );
+
+        grabbedInteractable = interactable;
+        grabbedRigidbody = hit.collider.GetComponent<Rigidbody>();
+
+        if (grabbedRigidbody != null)
         {
-            var interactable = hit.collider.GetComponent<UnityEngine.XR.Interaction.Toolkit.Interactables.XRBaseInteractable>();
-
-            if (interactable != null && interactionManager != null)
-            {
-                // Select the interactable using the dummy interactor
-                interactionManager.SelectEnter((UnityEngine.XR.Interaction.Toolkit.Interactors.IXRSelectInteractor)dummyInteractor, (UnityEngine.XR.Interaction.Toolkit.Interactables.IXRSelectInteractable)interactable);
-
-                grabbedObject = interactable;
-                grabbedRigidbody = hit.collider.GetComponent<Rigidbody>();
-
-                if (grabbedRigidbody != null)
-                {
-                    grabbedRigidbody.useGravity = true;  // Ensure gravity stays ON
-                    grabbedRigidbody.isKinematic = false; // Make sure physics is active
-
-                    // Store the original parent (if any) and remove parenting to the interactor
-                    originalParent = grabbedObject.transform.parent;
-                    grabbedObject.transform.SetParent(null); // Remove any parent to avoid snapping
-                }
-
-                Debug.Log("Simulated Grab on: " + interactable.gameObject.name);
-            }
+            // Ensure physics is active
+            grabbedRigidbody.isKinematic = false;
+            grabbedRigidbody.useGravity = true;
         }
+
+        // Detach from any parent to avoid snapping
+        originalParent = interactable.transform.parent;
+        interactable.transform.SetParent(null);
+
+        Debug.Log($"[SimulateGrab3D] Grabbed: {interactable.name}");
     }
 
-    void SimulateRelease()
+    private void SimulateRelease()
     {
-        if (grabbedObject != null && interactionManager != null)
+        if (grabbedInteractable == null)
+            return;
+
+        interactionManager.SelectExit(
+            (IXRSelectInteractor)dummyInteractor,
+            grabbedInteractable
+        );
+
+        if (grabbedRigidbody != null)
         {
-            interactionManager.SelectExit((UnityEngine.XR.Interaction.Toolkit.Interactors.IXRSelectInteractor)dummyInteractor, grabbedObject);
-
-            if (grabbedRigidbody != null)
-            {
-                grabbedRigidbody.useGravity = true; // Ensure gravity is restored
-                grabbedRigidbody.isKinematic = false; // Allow physics again
-
-                // Restore the original parent (if any)
-                if (originalParent != null)
-                    grabbedObject.transform.SetParent(originalParent);
-                else
-                    grabbedObject.transform.SetParent(null);
-            }
-
-            Debug.Log("Released: " + grabbedObject.transform.gameObject.name);
-            grabbedObject = null;
-            grabbedRigidbody = null;
+            grabbedRigidbody.useGravity = true;
+            grabbedRigidbody.isKinematic = false;
         }
+
+        // Restore original parent (if any)
+        if (originalParent != null)
+            grabbedInteractable.transform.SetParent(originalParent);
+        else
+            grabbedInteractable.transform.SetParent(null);
+
+        Debug.Log($"[SimulateGrab3D] Released");
+
+        grabbedInteractable = null;
+        grabbedRigidbody = null;
+        originalParent = null;
     }
 }
