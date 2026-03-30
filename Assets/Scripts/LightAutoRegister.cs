@@ -1,40 +1,51 @@
 using UnityEngine;
+using System.Collections;
 
 /// <summary>
-/// LIGHT AUTO REGISTER
-/// -------------------
-/// This script automatically registers a Light component
-/// with the LightingManager at runtime.
+/// LIGHT AUTO REGISTER (ROBUST VERSION)
+/// -----------------------------------
+/// This script automatically registers a Light with the LightingManager,
+/// even if the manager is not ready when this object initialises.
 ///
-/// WHY THIS EXISTS:
-/// Instead of manually assigning hundreds of lights,
-/// each light "announces itself" to the manager.
+/// KEY IMPROVEMENT:
+/// Uses a retry system instead of relying on execution order.
 ///
-/// WHERE TO USE:
-/// Attach this to any GameObject that has a Light component.
-/// (Best placed on light prefabs so it propagates automatically)
+/// WHY THIS MATTERS:
+/// Unity does NOT guarantee that scripts initialise in a specific order.
+/// This script removes that dependency entirely.
 ///
-/// EXECUTION TIMING:
-/// Uses Awake() instead of Start() to ensure registration
-/// happens BEFORE the LightingManager initialises its state.
-///
-/// TEACHING POINT:
-/// This demonstrates a "self-registering system",
-/// which is common in scalable game architecture.
+/// TEACHING TAKEAWAY:
+/// "Don't assume systems exist — verify and retry."
 /// </summary>
 
-[RequireComponent(typeof(Light))] // Enforces that a Light component must exist
+[RequireComponent(typeof(Light))] // Ensures every object using this script has a Light
 public class LightAutoRegister : MonoBehaviour
 {
-    // Cached reference to avoid repeated GetComponent calls
-    private Light cachedLight;
+    // =========================================================
+    // 🔹 CONFIG (you can expose these later if needed)
+    // =========================================================
 
-    // Prevent accidental double registration
+    [Header("Retry Settings")]
+
+    [Tooltip("Time (seconds) between retry attempts")]
+    [SerializeField] private float retryInterval = 0.5f;
+
+    [Tooltip("Maximum number of retry attempts before giving up")]
+    [SerializeField] private int maxRetries = 10;
+
+    // =========================================================
+    // 🔹 INTERNAL STATE
+    // =========================================================
+
+    private Light cachedLight;        // Cached reference to avoid repeated GetComponent calls
     private bool hasRegistered = false;
+    private int retryCount = 0;
+    private Coroutine retryCoroutine;
 
     // =========================================================
-    // 🔹 AWAKE (runs VERY early in Unity lifecycle)
+    // 🔹 INITIALISATION
     // =========================================================
+
     private void Awake()
     {
         // Cache the Light component immediately
@@ -46,66 +57,112 @@ public class LightAutoRegister : MonoBehaviour
             return;
         }
 
-        TryRegister();
+        // Start the registration process
+        StartRegistrationProcess();
     }
 
     // =========================================================
-    // 🔹 SAFETY FALLBACK (in case manager isn't ready yet)
+    // 🔹 REGISTRATION ENTRY POINT
     // =========================================================
-    private void Start()
+
+    private void StartRegistrationProcess()
     {
-        // If registration failed in Awake (e.g. manager not yet present),
-        // try again here as a fallback.
-        if (!hasRegistered)
+        // Try immediately first (best case scenario)
+        if (!TryRegister())
         {
-            TryRegister();
+            // If that fails, begin retry loop
+            retryCoroutine = StartCoroutine(RetryRegistration());
         }
     }
 
     // =========================================================
-    // 🔹 REGISTRATION LOGIC
+    // 🔹 CORE REGISTRATION LOGIC
     // =========================================================
-    private void TryRegister()
-    {
-        // Ensure we only register once
-        if (hasRegistered) return;
 
-        // Check if LightingManager exists
+    /// <summary>
+    /// Attempts to register with the LightingManager.
+    /// Returns TRUE if successful.
+    /// </summary>
+    private bool TryRegister()
+    {
+        if (hasRegistered) return true;
+
+        // Check if the manager exists
         if (LightingManager.Instance != null)
         {
             LightingManager.Instance.RegisterLight(cachedLight);
             hasRegistered = true;
 
-            // Optional debug (comment out once stable)
-            // Debug.Log($"[LightAutoRegister] Registered: {gameObject.name}");
+            // Stop retry loop if running
+            if (retryCoroutine != null)
+            {
+                StopCoroutine(retryCoroutine);
+                retryCoroutine = null;
+            }
+
+            // Optional debug
+            Debug.Log($"[LightAutoRegister] Registered: {gameObject.name}");
+
+            return true;
         }
-        else
-        {
-            // Manager not ready yet — this can happen depending on script order
-            Debug.LogWarning($"[LightAutoRegister] LightingManager not found yet for {gameObject.name}");
-        }
+
+        // Manager not ready yet
+        return false;
     }
 
     // =========================================================
-    // 🔹 OPTIONAL: HANDLE OBJECT ENABLE/DISABLE
+    // 🔹 RETRY SYSTEM
     // =========================================================
-    private void OnEnable()
+
+    /// <summary>
+    /// Keeps trying to register until successful or max retries reached.
+    /// </summary>
+    private IEnumerator RetryRegistration()
     {
-        // If object is re-enabled (e.g. pooled or toggled),
-        // ensure it's still registered
+        while (!hasRegistered && retryCount < maxRetries)
+        {
+            retryCount++;
+
+            // Wait before retrying
+            yield return new WaitForSeconds(retryInterval);
+
+            // Try again
+            if (TryRegister())
+            {
+                yield break; // success → exit coroutine
+            }
+        }
+
+        // If we reach here, registration failed after multiple attempts
         if (!hasRegistered)
         {
-            TryRegister();
+            Debug.LogWarning(
+                $"[LightAutoRegister] Failed to register {gameObject.name} after {maxRetries} attempts. " +
+                $"Ensure LightingManager exists in the scene."
+            );
         }
     }
 
     // =========================================================
-    // 🔹 OPTIONAL: CLEANUP (ADVANCED / NOT REQUIRED YET)
+    // 🔹 HANDLE ENABLE / DISABLE
     // =========================================================
+
+    private void OnEnable()
+    {
+        // If object becomes active again and hasn't registered, try again
+        if (!hasRegistered && cachedLight != null)
+        {
+            StartRegistrationProcess();
+        }
+    }
+
+    // =========================================================
+    // 🔹 OPTIONAL CLEANUP
+    // =========================================================
+
     private void OnDestroy()
     {
-        // You could unregister here if needed:
+        // Optional future extension:
         // LightingManager.Instance?.UnregisterLight(cachedLight);
-        // Not required unless you dynamically destroy lights
     }
 }
