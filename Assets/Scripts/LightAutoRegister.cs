@@ -134,13 +134,13 @@ public class LightAutoRegister : MonoBehaviour
         }
 
         // If we reach here, registration failed after multiple attempts
-        if (!hasRegistered)
-        {
-            Debug.LogWarning(
-                $"[LightAutoRegister] Failed to register {gameObject.name} after {maxRetries} attempts. " +
-                $"Ensure LightingManager exists in the scene."
-            );
-        }
+    //    if (!hasRegistered)
+    //    {
+   //         Debug.LogWarning(
+   //             $"[LightAutoRegister] Failed to register {gameObject.name} after {maxRetries} attempts. " +
+   //            $"Ensure LightingManager exists in the scene."
+   //         );
+   //     }
     }
 
     // =========================================================
