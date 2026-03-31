@@ -3,9 +3,17 @@ using TMPro;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// ARScannerDevice (Auto-Bind Version)
-/// If no InputAction is assigned, creates one automatically.
-/// This avoids setup errors in class.
+/// ARScannerDevice
+/// ---------------
+/// Controls player scanning system.
+///
+/// FEATURES:
+/// - Auto input (mouse + XR trigger)
+/// - Raycast detection
+/// - Soft lock-on
+/// - Anchor-based targeting
+/// - Smooth beam
+/// - Highlight triggering
 /// </summary>
 public class ARScannerDevice : MonoBehaviour
 {
@@ -17,48 +25,44 @@ public class ARScannerDevice : MonoBehaviour
     public float scanDistance = 8f;
     public LayerMask scannableLayers;
 
-    [Header("Scanner UI")]
+    [Header("Lock-On")]
+    public float lockHoldTime = 0.5f;
+    public float beamSmoothSpeed = 15f;
+
+    [Header("UI")]
     public TextMeshProUGUI headerText;
     public TextMeshProUGUI targetNameText;
     public TextMeshProUGUI statusText;
 
-    [Header("Visual Feedback")]
+    [Header("Visuals")]
     public LineRenderer scanLine;
     public GameObject scannerGlow;
 
     private ARScannable currentTarget;
     private float scanTimer;
+    private float lockTimer;
+    private Vector3 currentBeamEnd;
 
-    // =========================
-    // AUTO INPUT SETUP
-    // =========================
+    // =========================================================
+    // 🔹 AUTO INPUT
+    // =========================================================
 
     void Awake()
     {
-        // If no InputAction assigned → create one automatically
         if (scanAction == null)
         {
             scanAction = new InputAction("Scan", InputActionType.Button);
-
-            // Desktop fallback
             scanAction.AddBinding("<Mouse>/leftButton");
-
-            // XR trigger (Right Hand)
             scanAction.AddBinding("<XRController>{RightHand}/trigger");
-
-            Debug.Log("Auto-created Scan InputAction (Mouse + XR Trigger)");
         }
     }
 
-    private void OnEnable()
-    {
-        scanAction.Enable();
-    }
+    private void OnEnable() => scanAction.Enable();
+    private void OnDisable() => scanAction.Disable();
 
-    private void OnDisable()
-    {
-        scanAction.Disable();
-    }
+    // =========================================================
+    // 🔹 INIT
+    // =========================================================
 
     void Start()
     {
@@ -69,19 +73,25 @@ public class ARScannerDevice : MonoBehaviour
 
         if (scannerGlow != null)
             scannerGlow.SetActive(false);
+
+        currentBeamEnd = scanOrigin.position;
     }
+
+    // =========================================================
+    // 🔹 UPDATE
+    // =========================================================
 
     void Update()
     {
         if (scanAction.IsPressed())
-        {
             Scan();
-        }
         else
-        {
             StopScan();
-        }
     }
+
+    // =========================================================
+    // 🔹 SCAN LOGIC
+    // =========================================================
 
     void Scan()
     {
@@ -91,49 +101,84 @@ public class ARScannerDevice : MonoBehaviour
         Ray ray = new Ray(scanOrigin.position, scanOrigin.forward);
         RaycastHit hit;
 
+        ARScannable detectedTarget = null;
+
         if (Physics.Raycast(ray, out hit, scanDistance, scannableLayers))
         {
-            if (scanLine != null)
+            detectedTarget = hit.collider.GetComponentInParent<ARScannable>();
+        }
+
+        // LOCK-ON
+        if (detectedTarget != null)
+        {
+            if (currentTarget != detectedTarget)
             {
-                scanLine.enabled = true;
-                scanLine.SetPosition(0, scanOrigin.position);
-                scanLine.SetPosition(1, hit.point);
+                ClearTarget();
+
+                currentTarget = detectedTarget;
+                currentTarget.SetHighlight(true);
+
+                scanTimer = 0f;
             }
 
-            ARScannable target = hit.collider.GetComponentInParent<ARScannable>();
+            lockTimer = lockHoldTime;
+        }
+        else
+        {
+            lockTimer -= Time.deltaTime;
 
-            if (target != null)
+            if (lockTimer <= 0f)
             {
-                if (currentTarget != target)
-                {
-                    ClearTarget();
-                    currentTarget = target;
-                    scanTimer = 0f;
-                }
-
-                scanTimer += Time.deltaTime;
-
-                headerText.text = "SCANNING";
-                targetNameText.text = target.displayName;
-
-                float progress = Mathf.Clamp01(scanTimer / target.requiredScanTime);
-                statusText.text = "Progress: " + Mathf.RoundToInt(progress * 100f) + "%";
-
-                if (scanTimer >= target.requiredScanTime)
-                {
-                    headerText.text = "SCAN COMPLETE";
-                    targetNameText.text = target.displayName;
-                    statusText.text = target.description;
-
-                    target.ShowScanVisuals();
-                }
-
+                LoseTarget();
                 return;
             }
         }
 
-        LoseTarget();
+        // TARGET POSITION
+        Vector3 targetPoint;
+
+        if (currentTarget.scanTargetAnchor != null)
+            targetPoint = currentTarget.scanTargetAnchor.position;
+        else if (currentTarget.overlayAnchor != null)
+            targetPoint = currentTarget.overlayAnchor.position;
+        else
+            targetPoint = currentTarget.transform.position;
+
+        // SMOOTH BEAM
+        currentBeamEnd = Vector3.Lerp(
+            currentBeamEnd,
+            targetPoint,
+            Time.deltaTime * beamSmoothSpeed
+        );
+
+        if (scanLine != null)
+        {
+            scanLine.enabled = true;
+            scanLine.SetPosition(0, scanOrigin.position);
+            scanLine.SetPosition(1, currentBeamEnd);
+        }
+
+        // PROGRESS
+        scanTimer += Time.deltaTime;
+
+        headerText.text = "SCANNING";
+        targetNameText.text = currentTarget.displayName;
+
+        float progress = Mathf.Clamp01(scanTimer / currentTarget.requiredScanTime);
+        statusText.text = "Progress: " + Mathf.RoundToInt(progress * 100f) + "%";
+
+        if (scanTimer >= currentTarget.requiredScanTime)
+        {
+            headerText.text = "SCAN COMPLETE";
+            statusText.text = currentTarget.description;
+
+            currentTarget.ShowScanVisuals();
+        }
     }
+
+    // =========================================================
+    // 🔹 RESET
+    // =========================================================
 
     void StopScan()
     {
@@ -165,6 +210,7 @@ public class ARScannerDevice : MonoBehaviour
     {
         if (currentTarget != null)
         {
+            currentTarget.SetHighlight(false);
             currentTarget.HideScanVisuals();
             currentTarget = null;
         }
@@ -174,8 +220,8 @@ public class ARScannerDevice : MonoBehaviour
 
     void ResetUI()
     {
-        if (headerText != null) headerText.text = "SCANNER READY";
-        if (targetNameText != null) targetNameText.text = "---";
-        if (statusText != null) statusText.text = "Hold trigger or click to scan.";
+        headerText.text = "SCANNER READY";
+        targetNameText.text = "---";
+        statusText.text = "Hold trigger to scan.";
     }
 }

@@ -2,78 +2,163 @@ using UnityEngine;
 
 /// <summary>
 /// ARScannable
-/// This script marks an object as "scannable" by the player's scanner.
-/// It stores all the information that will be revealed during scanning.
+/// -----------
+/// Attach to any object that can be scanned.
+///
+/// RESPONSIBILITIES:
+/// - Stores scan data (name, description)
+/// - Defines anchor points:
+///     • overlayAnchor → hologram position
+///     • scanTargetAnchor → beam target position
+/// - Handles scan visuals (hologram, X-ray)
+/// - Handles highlight (with optional pulsing)
+///
+/// DESIGN PRINCIPLE:
+/// Separate interaction (targeting) from presentation (visuals)
 /// </summary>
 public class ARScannable : MonoBehaviour
 {
-    // =========================
-    // BASIC INFO (what the player sees)
-    // =========================
+    // =========================================================
+    // 🔹 SCAN DATA
+    // =========================================================
 
-    [Header("Scan Information")]
+    [Header("Scan Info")]
 
-    [Tooltip("Name shown on the scanner UI")]
     public string displayName = "Unknown Object";
 
-    [Tooltip("Description shown after scan completes")]
     [TextArea]
     public string description = "No data available.";
 
-    // =========================
-    // VISUAL ELEMENTS (optional)
-    // =========================
+    // =========================================================
+    // 🔹 ANCHORS (CORE SYSTEM)
+    // =========================================================
+
+    [Header("Anchors")]
+
+    [Tooltip("Where hologram appears (above object)")]
+    public Transform overlayAnchor;
+
+    [Tooltip("Where scanner beam targets (centre mass)")]
+    public Transform scanTargetAnchor;
+
+    // =========================================================
+    // 🔹 VISUAL ELEMENTS
+    // =========================================================
 
     [Header("Visual Feedback")]
 
-    [Tooltip("Prefab that appears above the object when scanned (e.g. hologram)")]
     public GameObject overlayPrefab;
-
-    [Tooltip("Optional position for the overlay (if null, uses object position)")]
-    public Transform overlayAnchor;
-
-    [Tooltip("Hidden object that becomes visible during scan (e.g. X-ray mesh)")]
     public GameObject hiddenXRayObject;
 
-    // =========================
-    // SCAN SETTINGS
-    // =========================
+    // =========================================================
+    // 🔹 SCAN SETTINGS
+    // =========================================================
 
     [Header("Scan Settings")]
 
-    [Tooltip("How long the player must scan this object (seconds)")]
     public float requiredScanTime = 1.5f;
 
-    // =========================
-    // INTERNAL STATE (not visible in Inspector)
-    // =========================
+    // =========================================================
+    // 🔹 HIGHLIGHT SYSTEM
+    // =========================================================
 
-    [HideInInspector]
-    public GameObject spawnedOverlayInstance;
+    [Header("Highlight")]
 
-    // =========================
-    // FUNCTIONS CALLED BY SCANNER
-    // =========================
+    [Tooltip("Renderers to highlight (leave empty = auto-detect)")]
+    public Renderer[] highlightRenderers;
 
-    /// <summary>
-    /// Called when scan completes successfully.
-    /// Shows any hidden visuals.
-    /// </summary>
-    public void ShowScanVisuals()
+    [Tooltip("Highlight emission colour")]
+    public Color highlightColor = Color.cyan;
+
+    [Tooltip("Enable pulsing highlight")]
+    public bool usePulse = true;
+
+    [Tooltip("Pulse speed")]
+    public float pulseSpeed = 2f;
+
+    [Tooltip("Pulse intensity")]
+    public float pulseIntensity = 2f;
+
+    private MaterialPropertyBlock propertyBlock;
+    private bool isHighlighted = false;
+
+    // =========================================================
+    // 🔹 INTERNAL STATE
+    // =========================================================
+
+    private GameObject activeOverlayInstance;
+
+    // =========================================================
+    // 🔹 INITIALISE
+    // =========================================================
+
+    private void Awake()
     {
-        // Turn on hidden "X-ray" object if assigned
-        if (hiddenXRayObject != null)
+        // Auto-assign renderers if not set
+        if (highlightRenderers == null || highlightRenderers.Length == 0)
         {
-            hiddenXRayObject.SetActive(true);
+            highlightRenderers = GetComponentsInChildren<Renderer>();
         }
 
-        // Spawn hologram overlay if assigned and not already spawned
-        if (overlayPrefab != null && spawnedOverlayInstance == null)
+        propertyBlock = new MaterialPropertyBlock();
+    }
+
+    // =========================================================
+    // 🔹 UPDATE (FOR PULSE EFFECT)
+    // =========================================================
+
+    private void Update()
+    {
+        if (!isHighlighted || !usePulse) return;
+
+        float pulse = Mathf.PingPong(Time.time * pulseSpeed, 1f);
+        float intensity = 1f + (pulse * pulseIntensity);
+
+        ApplyEmission(highlightColor * intensity);
+    }
+
+    // =========================================================
+    // 🔹 HIGHLIGHT CONTROL
+    // =========================================================
+
+    public void SetHighlight(bool state)
+    {
+        if (isHighlighted == state) return;
+
+        isHighlighted = state;
+
+        if (!state)
         {
-            // Use anchor if available, otherwise use object position
+            ApplyEmission(Color.black);
+        }
+    }
+
+    private void ApplyEmission(Color color)
+    {
+        foreach (Renderer rend in highlightRenderers)
+        {
+            if (rend == null) continue;
+
+            rend.GetPropertyBlock(propertyBlock);
+            propertyBlock.SetColor("_EmissionColor", color);
+            rend.SetPropertyBlock(propertyBlock);
+        }
+    }
+
+    // =========================================================
+    // 🔹 SCAN VISUALS
+    // =========================================================
+
+    public void ShowScanVisuals()
+    {
+        if (hiddenXRayObject != null)
+            hiddenXRayObject.SetActive(true);
+
+        if (overlayPrefab != null && activeOverlayInstance == null)
+        {
             Transform anchor = overlayAnchor != null ? overlayAnchor : transform;
 
-            spawnedOverlayInstance = Instantiate(
+            activeOverlayInstance = Instantiate(
                 overlayPrefab,
                 anchor.position,
                 anchor.rotation,
@@ -82,22 +167,31 @@ public class ARScannable : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Called when scanning stops or resets.
-    /// Cleans up visuals.
-    /// </summary>
     public void HideScanVisuals()
     {
-        // Turn off X-ray object
         if (hiddenXRayObject != null)
-        {
             hiddenXRayObject.SetActive(false);
+
+        if (activeOverlayInstance != null)
+            Destroy(activeOverlayInstance);
+    }
+
+    // =========================================================
+    // 🔹 DEBUG GIZMOS
+    // =========================================================
+
+    private void OnDrawGizmos()
+    {
+        if (scanTargetAnchor != null)
+        {
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawSphere(scanTargetAnchor.position, 0.05f);
         }
 
-        // Destroy overlay instance
-        if (spawnedOverlayInstance != null)
+        if (overlayAnchor != null)
         {
-            Destroy(spawnedOverlayInstance);
+            Gizmos.color = Color.green;
+            Gizmos.DrawSphere(overlayAnchor.position, 0.05f);
         }
     }
 }

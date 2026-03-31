@@ -32716,7 +32716,7 @@ LineRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 2100000, guid: a52653ed7613a4d449d52af63262182a, type: 2}
+  - {fileID: 2100000, guid: 9373f3ce972b26b48806e7bce02f1cbe, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -32747,8 +32747,8 @@ LineRenderer:
       serializedVersion: 2
       m_Curve:
       - serializedVersion: 3
-        time: 0.0048065186
-        value: 0.55208075
+        time: 0
+        value: 0.05208075
         inSlope: 0
         outSlope: 0
         tangentMode: 0
@@ -32757,7 +32757,7 @@ LineRenderer:
         outWeight: 0.33333334
       - serializedVersion: 3
         time: 1
-        value: 1
+        value: 0.075
         inSlope: 0
         outSlope: 0
         tangentMode: 0
@@ -32806,7 +32806,7 @@ LineRenderer:
     generateLightingData: 0
   m_MaskInteraction: 0
   m_UseWorldSpace: 1
-  m_Loop: 1
+  m_Loop: 0
   m_ApplyActiveColorSpace: 1
 --- !u!114 &374563442
 MonoBehaviour:
@@ -32850,6 +32850,8 @@ MonoBehaviour:
   scannableLayers:
     serializedVersion: 2
     m_Bits: 64
+  lockHoldTime: 0.5
+  beamSmoothSpeed: 15
   headerText: {fileID: 1208698884}
   targetNameText: {fileID: 663279327}
   statusText: {fileID: 709204059}
@@ -87175,7 +87177,7 @@ GameObject:
   - component: {fileID: 935476538}
   - component: {fileID: 935476539}
   m_Layer: 6
-  m_Name: ReactorCore
+  m_Name: Scannable_ReactorCore
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -87196,6 +87198,7 @@ Transform:
   m_Children:
   - {fileID: 1699410795}
   - {fileID: 2002456735}
+  - {fileID: 2100569405}
   m_Father: {fileID: 1683418252081703117}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &935476539
@@ -87212,11 +87215,16 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   displayName: Reactor Core
   description: Coolant flow reduced to 32%.
-  overlayPrefab: {fileID: 116224, guid: fec95d43e0296d747acacdc285a4647c, type: 3}
   overlayAnchor: {fileID: 2002456735}
+  scanTargetAnchor: {fileID: 2100569405}
+  overlayPrefab: {fileID: 116224, guid: fec95d43e0296d747acacdc285a4647c, type: 3}
   hiddenXRayObject: {fileID: 0}
   requiredScanTime: 1
-  spawnedOverlayInstance: {fileID: 0}
+  highlightRenderers: []
+  highlightColor: {r: 0, g: 1, b: 1, a: 0.5019608}
+  usePulse: 1
+  pulseSpeed: 5
+  pulseIntensity: 1
 --- !u!1001 &935600461
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -155269,11 +155277,16 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   displayName: Core Pipe System
   description: 'Recommended: Fix this pipe'
-  overlayPrefab: {fileID: 0}
   overlayAnchor: {fileID: 0}
+  scanTargetAnchor: {fileID: 0}
+  overlayPrefab: {fileID: 0}
   hiddenXRayObject: {fileID: 0}
   requiredScanTime: 1.5
-  spawnedOverlayInstance: {fileID: 0}
+  highlightRenderers: []
+  highlightColor: {r: 0, g: 1, b: 1, a: 1}
+  usePulse: 1
+  pulseSpeed: 2
+  pulseIntensity: 2
 --- !u!1 &1658749992
 GameObject:
   m_ObjectHideFlags: 0
@@ -160282,7 +160295,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 2100000, guid: 3b73c95214dfc4876a164f473ce71277, type: 2}
+  - {fileID: 2100000, guid: 5ad07c5b622a146b7849af51853d43f9, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -187894,8 +187907,8 @@ Transform:
   m_GameObject: {fileID: 2002456734}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: -0.7071068, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 0, y: 1, z: 0}
-  m_LocalScale: {x: 0.3, y: 0.3, z: 0.3}
+  m_LocalPosition: {x: 0, y: 0.75, z: 0}
+  m_LocalScale: {x: 0.5, y: 0.5, z: 0.5}
   m_ConstrainProportionsScale: 1
   m_Children: []
   m_Father: {fileID: 935476538}
@@ -194358,6 +194371,37 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2098643037}
   m_CullTransparentMesh: 1
+--- !u!1 &2100569404
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2100569405}
+  m_Layer: 6
+  m_Name: Scan Target Anchor
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2100569405
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2100569404}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 935476538}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!4 &2100737186 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 400002, guid: 956ac30281e784ac8bfbd55765786260, type: 3}
